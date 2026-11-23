@@ -1,77 +1,70 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { validateConfig } from "./config";
 
-describe("config helpers", () => {
-  const ORIGINAL_ENV = process.env;
+describe("validateConfig", () => {
+  const originalEnv = process.env;
 
   beforeEach(() => {
     vi.resetModules();
-    process.env = { ...ORIGINAL_ENV };
+    process.env = { ...originalEnv };
+  });
+
+  it("returns isConfigured true when all required variables are present and valid", () => {
+    process.env.NEXT_PUBLIC_STELLAR_NETWORK = "testnet";
+    process.env.NEXT_PUBLIC_HORIZON_URL = "https://horizon-testnet.stellar.org";
+    process.env.NEXT_PUBLIC_SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org";
+    process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
+    process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_ID = "CABGWVIZFF62FG67ZGFEP67NEEY4WYTMFURDMFTKKNRDAFPKPOJDTN4C";
+    process.env.NEXT_PUBLIC_INVOICE_CONTRACT_ID = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH2";
+    process.env.NEXT_PUBLIC_POOL_CONTRACT_ID = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH3";
+    process.env.NEXT_PUBLIC_ESCROW_CONTRACT_ID = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH4";
+    process.env.NEXT_PUBLIC_USDC_ISSUER = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+    process.env.NEXT_PUBLIC_USDC_ASSET_CODE = "USDC";
+
+    const result = validateConfig();
+    expect(result.missing).toEqual([]);
+    expect(result.invalid).toEqual([]);
+    expect(result.isConfigured).toBe(true);
+  });
+
+  it("detects missing variables", () => {
     delete process.env.NEXT_PUBLIC_INVOICE_CONTRACT_ID;
-    delete process.env.NEXT_PUBLIC_POOL_CONTRACT_ID;
-    delete process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_ID;
-  });
-
-  afterEach(() => {
-    process.env = ORIGINAL_ENV;
-    vi.restoreAllMocks();
-  });
-
-  it("validates successfully when all required environment variables are set", async () => {
-    process.env.NEXT_PUBLIC_INVOICE_CONTRACT_ID = "C123";
-    process.env.NEXT_PUBLIC_POOL_CONTRACT_ID = "C456";
-    process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_ID = "C789";
-
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { validateConfig } = await import("./config");
-
     const result = validateConfig();
-
-    expect(result).toEqual({
-      missing: [],
-      isConfigured: true,
-    });
-    expect(warnSpy).not.toHaveBeenCalled();
-  });
-
-  it("identifies missing environment variables and logs a warning", async () => {
-    process.env.NEXT_PUBLIC_INVOICE_CONTRACT_ID = "C123";
-    // NEXT_PUBLIC_POOL_CONTRACT_ID is missing
-    // NEXT_PUBLIC_REGISTRY_CONTRACT_ID is empty string
-    process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_ID = "";
-
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { validateConfig } = await import("./config");
-
-    const result = validateConfig();
-
+    expect(result.missing).toContain("NEXT_PUBLIC_INVOICE_CONTRACT_ID");
     expect(result.isConfigured).toBe(false);
-    expect(result.missing).toEqual([
-      "NEXT_PUBLIC_POOL_CONTRACT_ID",
-      "NEXT_PUBLIC_REGISTRY_CONTRACT_ID",
-    ]);
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy).toHaveBeenCalledWith(
-      "[TrusTrove] Missing required environment variables: NEXT_PUBLIC_POOL_CONTRACT_ID, NEXT_PUBLIC_REGISTRY_CONTRACT_ID",
-    );
   });
 
-  it("caches the validation result on subsequent calls", async () => {
-    process.env.NEXT_PUBLIC_INVOICE_CONTRACT_ID = "C123";
-    process.env.NEXT_PUBLIC_POOL_CONTRACT_ID = "C456";
-    process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_ID = "C789";
+  it("detects invalid contract IDs", () => {
+    process.env.NEXT_PUBLIC_STELLAR_NETWORK = "testnet";
+    process.env.NEXT_PUBLIC_HORIZON_URL = "https://horizon-testnet.stellar.org";
+    process.env.NEXT_PUBLIC_SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org";
+    process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
+    process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_ID = "CABGWVIZFF62FG67ZGFEP67NEEY4WYTMFURDMFTKKNRDAFPKPOJDTN4C";
+    process.env.NEXT_PUBLIC_INVOICE_CONTRACT_ID = "invalid-id";
+    process.env.NEXT_PUBLIC_POOL_CONTRACT_ID = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH3";
+    process.env.NEXT_PUBLIC_ESCROW_CONTRACT_ID = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH4";
+    process.env.NEXT_PUBLIC_USDC_ISSUER = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+    process.env.NEXT_PUBLIC_USDC_ASSET_CODE = "USDC";
 
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { validateConfig } = await import("./config");
+    const result = validateConfig();
+    expect(result.invalid).toContain("NEXT_PUBLIC_INVOICE_CONTRACT_ID");
+    expect(result.isConfigured).toBe(false);
+  });
 
-    const firstResult = validateConfig();
+  it("detects network mismatch (mainnet network with testnet passphrase)", () => {
+    process.env.NEXT_PUBLIC_STELLAR_NETWORK = "mainnet";
+    process.env.NEXT_PUBLIC_HORIZON_URL = "https://horizon.stellar.org";
+    process.env.NEXT_PUBLIC_SOROBAN_RPC_URL = "https://soroban.stellar.org";
+    process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
+    process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_ID = "CABGWVIZFF62FG67ZGFEP67NEEY4WYTMFURDMFTKKNRDAFPKPOJDTN4C";
+    process.env.NEXT_PUBLIC_INVOICE_CONTRACT_ID = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH2";
+    process.env.NEXT_PUBLIC_POOL_CONTRACT_ID = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH3";
+    process.env.NEXT_PUBLIC_ESCROW_CONTRACT_ID = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH4";
+    process.env.NEXT_PUBLIC_USDC_ISSUER = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+    process.env.NEXT_PUBLIC_USDC_ASSET_CODE = "USDC";
 
-    // Mutate env vars after initial validation to prove cached result is returned
-    delete process.env.NEXT_PUBLIC_INVOICE_CONTRACT_ID;
-
-    const secondResult = validateConfig();
-
-    expect(secondResult).toBe(firstResult);
-    expect(secondResult.isConfigured).toBe(true);
-    expect(warnSpy).not.toHaveBeenCalled();
+    const result = validateConfig();
+    expect(result.invalid).toContain("NEXT_PUBLIC_STELLAR_NETWORK");
+    expect(result.isConfigured).toBe(false);
   });
 });

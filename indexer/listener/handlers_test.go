@@ -756,6 +756,292 @@ func TestHandleAttestationSubmitted(t *testing.T) {
 	}
 }
 
+func TestHandleInvoiceFunded_DB(t *testing.T) {
+	skipIfNoDB(t)
+	ctx := context.Background()
+	l := newTestListener()
+
+	issuer := "GAKE4RRWTPSBWQ3S6KAPNLBQFSDR46EHPNLGLDWSWU7WRCJDZD"
+	buyer := "GBRDVOQJF3S6KAPNLBQFSDR46EHPNLGLDWSWU7WRCJDZD"
+	invoiceIDBytes := []byte("INV-FUNDED-01")
+
+	tx, err := db.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	dbInvoice := &db.DbInvoice{
+		ID:           string(invoiceIDBytes),
+		Issuer:       issuer,
+		Buyer:        buyer,
+		FaceValue:    "1000000",
+		DiscountBps:  100,
+		FundedAmount: "0",
+		DueDate:      time.Now().Add(24 * time.Hour).Unix(),
+		Status:       "Listed",
+		CreatedAt:    time.Now().Unix(),
+	}
+	_, err = db.InsertInvoice(ctx, tx, dbInvoice)
+	if err != nil {
+		t.Fatalf("InsertInvoice: %v", err)
+	}
+
+	fundedAmountU128 := xdr.UInt128Parts{Hi: 0, Lo: 950000}
+	val := xdr.ScVal{Type: xdr.ScValTypeScvU128, U128: &fundedAmountU128}
+	valBytes, _ := val.MarshalBinary()
+
+	event := SorobanEvent{
+		ID:             "evt-funded-1",
+		ContractID:     l.cfg.PoolContractID,
+		Ledger:         100,
+		LedgerClosedAt: time.Now().Format(time.RFC3339),
+		Topic: []string{
+			encodeSymbol("fund_invoice"),
+			encodeScVal(xdr.ScVal{Type: xdr.ScValTypeScvBytes, Bytes: (*xdr.ScBytes)(&invoiceIDBytes)}),
+		},
+		Value: base64.StdEncoding.EncodeToString(valBytes),
+	}
+
+	err = l.handleInvoiceFunded(ctx, tx, event, nil, time.Now().Unix())
+	if err != nil {
+		t.Fatalf("handleInvoiceFunded: %v", err)
+	}
+
+	inv, err := db.GetInvoiceByID(ctx, tx, string(invoiceIDBytes))
+	if err != nil {
+		t.Fatalf("GetInvoiceByID: %v", err)
+	}
+	if inv.Status != "Funded" {
+		t.Errorf("expected status Funded, got %s", inv.Status)
+	}
+	if inv.FundedAmount != "950000" {
+		t.Errorf("expected funded_amount 950000, got %s", inv.FundedAmount)
+	}
+	if inv.FundedAt == nil {
+		t.Error("expected funded_at to be set")
+	}
+}
+
+func TestHandleInvoiceRepaid_DB(t *testing.T) {
+	skipIfNoDB(t)
+	ctx := context.Background()
+	l := newTestListener()
+
+	issuer := "GAKE4RRWTPSBWQ3S6KAPNLBQFSDR46EHPNLGLDWSWU7WRCJDZD"
+	buyer := "GBRDVOQJF3S6KAPNLBQFSDR46EHPNLGLDWSWU7WRCJDZD"
+	invoiceIDBytes := []byte("INV-REPAID-01")
+
+	tx, err := db.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	now := time.Now().Unix()
+	dbInvoice := &db.DbInvoice{
+		ID:           string(invoiceIDBytes),
+		Issuer:       issuer,
+		Buyer:        buyer,
+		FaceValue:    "1000000",
+		DiscountBps:  100,
+		FundedAmount: "950000",
+		DueDate:      now + 86400,
+		Status:       "Funded",
+		CreatedAt:    now,
+	}
+	_, err = db.InsertInvoice(ctx, tx, dbInvoice)
+	if err != nil {
+		t.Fatalf("InsertInvoice: %v", err)
+	}
+
+	event := SorobanEvent{
+		ID:             "evt-repaid-1",
+		ContractID:     l.cfg.PoolContractID,
+		Ledger:         101,
+		LedgerClosedAt: time.Now().Format(time.RFC3339),
+		Topic: []string{
+			encodeSymbol("repay"),
+			encodeScVal(xdr.ScVal{Type: xdr.ScValTypeScvBytes, Bytes: (*xdr.ScBytes)(&invoiceIDBytes)}),
+		},
+		Value: "",
+	}
+
+	err = l.handleInvoiceRepaid(ctx, tx, event, nil, now+10)
+	if err != nil {
+		t.Fatalf("handleInvoiceRepaid: %v", err)
+	}
+
+	inv, err := db.GetInvoiceByID(ctx, tx, string(invoiceIDBytes))
+	if err != nil {
+		t.Fatalf("GetInvoiceByID: %v", err)
+	}
+	if inv.Status != "Repaid" {
+		t.Errorf("expected status Repaid, got %s", inv.Status)
+	}
+	if inv.RepaidAt == nil {
+		t.Error("expected repaid_at to be set")
+	}
+}
+
+func TestHandleInvoiceDefaulted_DB(t *testing.T) {
+	skipIfNoDB(t)
+	ctx := context.Background()
+	l := newTestListener()
+
+	issuer := "GAKE4RRWTPSBWQ3S6KAPNLBQFSDR46EHPNLGLDWSWU7WRCJDZD"
+	buyer := "GBRDVOQJF3S6KAPNLBQFSDR46EHPNLGLDWSWU7WRCJDZD"
+	invoiceIDBytes := []byte("INV-DEFAULT-01")
+
+	tx, err := db.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	now := time.Now().Unix()
+	dbInvoice := &db.DbInvoice{
+		ID:           string(invoiceIDBytes),
+		Issuer:       issuer,
+		Buyer:        buyer,
+		FaceValue:    "1000000",
+		DiscountBps:  100,
+		FundedAmount: "950000",
+		DueDate:      now - 86400,
+		Status:       "Funded",
+		CreatedAt:    now,
+	}
+	_, err = db.InsertInvoice(ctx, tx, dbInvoice)
+	if err != nil {
+		t.Fatalf("InsertInvoice: %v", err)
+	}
+
+	event := SorobanEvent{
+		ID:             "evt-default-1",
+		ContractID:     l.cfg.PoolContractID,
+		Ledger:         102,
+		LedgerClosedAt: time.Now().Format(time.RFC3339),
+		Topic: []string{
+			encodeSymbol("trigger_default"),
+			encodeScVal(xdr.ScVal{Type: xdr.ScValTypeScvBytes, Bytes: (*xdr.ScBytes)(&invoiceIDBytes)}),
+		},
+		Value: "",
+	}
+
+	err = l.handleInvoiceDefaulted(ctx, tx, event, nil)
+	if err != nil {
+		t.Fatalf("handleInvoiceDefaulted: %v", err)
+	}
+
+	inv, err := db.GetInvoiceByID(ctx, tx, string(invoiceIDBytes))
+	if err != nil {
+		t.Fatalf("GetInvoiceByID: %v", err)
+	}
+	if inv.Status != "Defaulted" {
+		t.Errorf("expected status Defaulted, got %s", inv.Status)
+	}
+}
+
+func TestSyncPoolStats_InjectedStub(t *testing.T) {
+	ctx := context.Background()
+	l := newTestListener()
+	called := false
+	l.getPoolStatsFn = func(ctx context.Context, cfg *config.Config, serverKP *keypair.Full) error {
+		called = true
+		return nil
+	}
+	l.syncPoolStats(ctx, "test_event", nil)
+	if !called {
+		t.Error("expected injected getPoolStatsFn to be called")
+	}
+}
+
+func TestHandleEvent_WebhookDispatchAndDeduplication(t *testing.T) {
+	skipIfNoDB(t)
+	ctx := context.Background()
+	l := newTestListener()
+
+	rec := &recordingDispatcher{}
+	l.dispatcher = rec
+
+	issuer := "GAKE4RRWTPSBWQ3S6KAPNLBQFSDR46EHPNLGLDWSWU7WRCJDZD"
+	buyer := "GBRDVOQJF3S6KAPNLBQFSDR46EHPNLGLDWSWU7WRCJDZD"
+	invoiceIDBytes := []byte("INV-DISPATCH-01")
+
+	tx, err := db.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	dbInvoice := &db.DbInvoice{
+		ID:           string(invoiceIDBytes),
+		Issuer:       issuer,
+		Buyer:        buyer,
+		FaceValue:    "1000000",
+		DiscountBps:  100,
+		FundedAmount: "0",
+		DueDate:      time.Now().Add(24 * time.Hour).Unix(),
+		Status:       "Created",
+		CreatedAt:    time.Now().Unix(),
+	}
+	_, _ = db.InsertInvoice(ctx, tx, dbInvoice)
+	tx.Commit(ctx)
+
+	event := SorobanEvent{
+		ID:             "evt-dispatch-uuid-123",
+		ContractID:     l.cfg.InvoiceContractID,
+		Ledger:         200,
+		LedgerClosedAt: time.Now().Format(time.RFC3339),
+		Topic:          []string{encodeSymbol("InvoiceCreated")},
+		Value:          makeInvoiceCreatedValue(invoiceIDBytes, issuer, buyer, 1000000, uint64(time.Now().Unix())),
+	}
+
+	err = l.handleEvent(ctx, event)
+	if err != nil {
+		t.Fatalf("handleEvent: %v", err)
+	}
+
+	if rec.calls != 1 {
+		t.Errorf("expected dispatcher to be called once, got %d calls", rec.calls)
+	}
+	if rec.eventType != "InvoiceCreated" {
+		t.Errorf("expected eventType InvoiceCreated, got %s", rec.eventType)
+	}
+
+	// Second call with same event ID should be skipped (de-duplicated)
+	err = l.handleEvent(ctx, event)
+	if err != nil {
+		t.Fatalf("handleEvent duplicate: %v", err)
+	}
+	if rec.calls != 1 {
+		t.Errorf("expected calls to remain 1 after duplicate event, got %d", rec.calls)
+	}
+}
+
+func TestHandleEvent_UnknownEventNameSkipped(t *testing.T) {
+	ctx := context.Background()
+	l := newTestListener()
+
+	rec := &recordingDispatcher{}
+	l.dispatcher = rec
+
+	event := SorobanEvent{
+		ID:             "evt-unknown-1",
+		ContractID:     l.cfg.InvoiceContractID,
+		Ledger:         300,
+		LedgerClosedAt: time.Now().Format(time.RFC3339),
+		Topic:          []string{encodeSymbol("unknown_contract_event_xyz")},
+		Value:          "",
+	}
+
+	err := l.handleEvent(ctx, event)
+	if err != nil {
+		t.Errorf("expected no error for unknown event name, got %v", err)
+	}
+	if rec.calls != 0 {
+		t.Errorf("expected dispatcher not to be called, got %d calls", rec.calls)
+	}
+}
+
 func TestHandleAttestationSubmitted_ShortTopic(t *testing.T) {
 	l := newTestListener()
 	ctx := context.Background()

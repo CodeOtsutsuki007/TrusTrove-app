@@ -12,6 +12,18 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { getErrorMessage } from "@/lib/errors";
 import { updateInvoiceStatus } from "@/lib/api";
 
+export const SIMULATION_PLACEHOLDER_INVOICE_ID =
+  "0000000000000000000000000000000000000000000000000000000000000000";
+
+export async function simulateInvoiceCreation<T>(fn: () => Promise<T>): Promise<T> {
+  return new Promise((resolve) => {
+    setTimeout(async () => {
+      const res = await fn();
+      resolve(res);
+    }, 300);
+  });
+}
+
 const invoiceContractID = process.env.NEXT_PUBLIC_INVOICE_CONTRACT_ID || "";
 
 const getStellarSdk = () => import("@stellar/stellar-sdk");

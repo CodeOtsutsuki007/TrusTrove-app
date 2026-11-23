@@ -185,7 +185,7 @@ func NewEventListener(cfg *config.Config, health *api.ListenerHealth, dispatcher
 		getLatestProcessedLedgerFn: db.GetLatestProcessedLedger,
 		upsertCheckpointFn:         db.UpsertCheckpoint,
 		areEventsProcessedFn:       db.AreEventsProcessed,
-		getPoolStatsFn:             db.SyncPoolStatsByContract,
+		getPoolStatsFn:             db.SyncPoolStats,
 	}
 	l.getLedgerHashFn = l.getLedgerHash
 	return l

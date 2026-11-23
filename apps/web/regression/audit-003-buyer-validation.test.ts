@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { StrKey } from "@stellar/stellar-sdk";
 import { isValidBuyerAddress } from "../lib/validation";
 
 describe("Regression: Buyer address validation wrapper (issue #130)", () => {
